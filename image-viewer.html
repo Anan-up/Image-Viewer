@@ -60,7 +60,7 @@
     transition:top .18s ease;
   }
   .viewport.grabbing{cursor:grabbing;}
-  .stage{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;}
+  .stage{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;transition:transform .16s cubic-bezier(.22,.61,.36,1);}
   .stage img{
     position:absolute;left:0;top:0;transform:translate(-50%,-50%);
     max-width:none;max-height:none;pointer-events:none;-webkit-user-drag:none;
@@ -77,10 +77,10 @@
   .thumbs.show{display:flex;}
   .thumb{
     position:relative;flex:0 0 auto;height:54px;width:54px;border-radius:6px;
-    overflow:hidden;background:#fafafa;border:2px solid transparent;cursor:pointer;
+    background:#fafafa;border:2px solid transparent;cursor:pointer;
     transition:border-color .12s;
   }
-  .thumb img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;border-radius:6px;}
   .thumb.active{border-color:var(--active);}
   .thumb .del{
     position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;
@@ -89,6 +89,8 @@
   }
   .thumb:hover .del{display:flex;}
   .thumb .del:hover{background:#f4f4f4;color:#111;}
+  /* P3：键盘焦点可见（缩略图可聚焦） */
+  .thumb:focus-visible{outline:2px solid var(--active);outline-offset:2px;}
 
   /* 空状态 */
   .empty{
@@ -149,7 +151,7 @@
     <div class="sep"></div>
     <div class="group">
       <button class="ico" data-act="zoom-out" title="缩小（-）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6"/></svg></button>
-      <div class="pct" id="pct" data-act="actual" title="实际大小（1）">100%</div>
+      <button class="pct" id="pct" data-act="actual" title="实际大小（1）">100%</button>
       <button class="ico" data-act="zoom-in" title="放大（+）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"/></svg></button>
       <button class="ico" data-act="fit" title="适应窗口（0 / f）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
       <button class="ico" data-act="rotate" title="旋转 90°（r）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v4h-4"/></svg></button>
@@ -186,7 +188,7 @@
   "use strict";
 
   const MIN_SCALE = 0.02, MAX_SCALE = 60;
-  const state = { scale:1, tx:0, ty:0, rot:0, index:0, fitScale:1 };
+  const state = { scale:1, tx:0, ty:0, rot:0, index:0 };
   let items = []; // {file, url, name}
 
   const $ = (id)=>document.getElementById(id);
@@ -195,17 +197,46 @@
   const fname = $('fname'), fmeta = $('fmeta'), pct = $('pct');
   const fileInput = $('fileInput'), folderInput = $('folderInput'), dropOverlay = $('dropOverlay');
 
+  /* 尺寸缓存：避免 pointermove / pinch 每帧读几何属性触发强制同步布局
+     - vp ：视口当前实际矩形（left/top/w/h），用于图片居中、缩放锚点与 pinch 锚点
+     - win：窗口尺寸，fitScale 阈值只依赖它（不随 immersive 切换而变化，避免循环抖动）
+     - BAR：顶部工具栏高度；immersive 时视口会多出这 54px，故 fitScale 基准高度固定为 win.h - BAR */
+  const BAR = 54;
+  let vp = { left:0, top:0, w:0, h:0 };
+  let win = { w: window.innerWidth, h: window.innerHeight };
+  let imgDim = { w:0, h:0 };
+  let lastWasFit = false;                 // 记录是否处于"适应窗口"，resize 时据此决定重 fit
+  function refreshVp(){
+    const r = viewport.getBoundingClientRect();
+    vp.left = r.left; vp.top = r.top; vp.w = r.width; vp.h = r.height;
+  }
+  function refreshWin(){ win.w = window.innerWidth; win.h = window.innerHeight; }
+  if(window.ResizeObserver){ new ResizeObserver(refreshVp).observe(viewport); }
+
   /* ---------- 变换应用 ---------- */
   function apply(){
     stage.style.transform =
       `translate(${state.tx}px, ${state.ty}px) scale(${state.scale}) rotate(${state.rot}deg)`;
-    pct.textContent = Math.round(state.scale * 100) + '%';
+    const pctNow = Math.round(state.scale * 100) + '%';
+    if(pct.textContent !== pctNow){       // P2：仅在百分比实际变化时才写 DOM，避免拖拽平移反复写、也避免屏幕阅读器逐帧播报缩放值
+      pct.textContent = pctNow;
+      pct.setAttribute('aria-label', '当前缩放 ' + pctNow + '，点击切换到实际大小');
+    }
     updateChrome();
   }
 
+  // 实时计算"适应窗口"的缩放比（依赖当前视口尺寸与旋转，避免缓存过期）
+  function computeFitScale(){
+    if(!imgDim.w || !imgDim.h) return state.scale;
+    const rotated = ((state.rot % 180) + 360) % 180 === 90;
+    const w = rotated ? imgDim.h : imgDim.w, h = rotated ? imgDim.w : imgDim.h;
+    // 基准高度固定为 win.h - BAR（非 immersive 视口高度），与 immersive 解耦，杜绝循环抖动
+    return Math.min(win.w / w, Math.max(0, win.h - BAR) / h);
+  }
   // 放大到图片溢出视口时隐藏上下工具栏，缩小回适应即恢复
   function updateChrome(){
-    const immersive = state.scale > state.fitScale + 1e-3;
+    // 相对容差：与 lastWasFit 的判定风格一致（scale 回到 fitScale 的 0.1% 内即视为 fit 态）；对极小 fitScale 安全（imgDim 失效时 computeFitScale 返回 state.scale，阈值=scale*1.001，判定为 false）
+    const immersive = state.scale > computeFitScale() * (1 + 1e-3);
     document.body.classList.toggle('immersive', immersive);
     if(!immersive) document.body.classList.remove('reveal');
   }
@@ -219,53 +250,73 @@
     state.scale = newScale;
     state.tx = mx - k * (mx - state.tx);
     state.ty = my - k * (my - state.ty);
+    // P2：用相对误差判定（与尺度无关），scale 与 fitScale 偏差 < 0.1% 视为同一 fit 态
+    lastWasFit = Math.abs(state.scale / computeFitScale() - 1) < 1e-3;
     apply();
   }
   function zoomCenter(factor){
-    zoomAt(viewport.clientWidth/2, viewport.clientHeight/2, factor);
+    zoomAt(vp.w/2, vp.h/2, factor);
   }
 
   function fit(){
-    if(!items.length) return;
-    const vw = viewport.clientWidth, vh = viewport.clientHeight;
-    const iw = img.naturalWidth, ih = img.naturalHeight;
-    if(!iw || !ih) return;
-    // 旋转 90/270 时宽高互换
-    const rotated = ((state.rot % 180) + 360) % 180 === 90;
-    const w = rotated ? ih : iw, h = rotated ? iw : ih;
-    const s = Math.min(vw / w, vh / h);
-    state.fitScale = s;
+    if(!items.length || !imgDim.w || !imgDim.h) return;
+    // P0：缩放比直接取 computeFitScale() —— 与"是否进入 immersive"的判据用同一基准
+    //     避免 immersive 下按 vp.h 放大到撑满后 scale>fitScale 恒成立、工具栏被锁死
+    const s = computeFitScale();
     state.scale = s;
-    state.tx = vw / 2;
-    state.ty = vh / 2;
+    state.tx = vp.w / 2;                // 居中按实际视口（视觉即时），与 scale 判据解耦
+    state.ty = vp.h / 2;
+    lastWasFit = true;                 // 记录"适应窗口"状态，供 resize / rotate 决定是否重 fit
     apply();
   }
   function actual(){
     state.scale = 1;
-    state.tx = viewport.clientWidth / 2;
-    state.ty = viewport.clientHeight / 2;
+    state.tx = vp.w / 2;
+    state.ty = vp.h / 2;
+    lastWasFit = false;                // 实际大小≠适应窗口，标记为非 fit
     apply();
   }
-  function rotate(){ state.rot += 90; apply(); }
+  function rotate(){
+    // 用稳定的 lastWasFit 标志判断，而非读 body.immersive（避免与 fitScale 解耦前的状态抖动）
+    const wasFit = lastWasFit;
+    state.rot += 90;
+    if(wasFit) fit(); else apply();
+  }
   function toggleFullscreen(){
-    if(document.fullscreenElement){
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if(fsEl){
       (document.exitFullscreen || document.webkitExitFullscreen).call(document);
     } else {
       const el = document.documentElement;
       (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
     }
   }
-  document.addEventListener('fullscreenchange', ()=>{
-    document.body.classList.toggle('fullscreen', !!document.fullscreenElement);
-  });
+  function onFsChange(){
+    document.body.classList.toggle('fullscreen', !!(document.fullscreenElement || document.webkitFullscreenElement));
+    refreshWin(); refreshVp();          // 全屏切换改变窗口尺寸，刷新 win/vp 缓存（computeFitScale、checkEdgeReveal 都依赖它）
+    if(lastWasFit) fit(); else updateChrome();   // P2：fit 态需随新视口重 fit，不依赖 resize 事件兜底（Safari/移动端全屏未必触发 resize）
+  }
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
 
   /* ---------- 渲染 ---------- */
   function renderCurrent(){
     const it = items[state.index];
     if(!it) return;
-    img.onload = ()=>{ fit(); updateInfo(); };
+    img.onload = ()=>{
+      imgDim.w = img.naturalWidth; imgDim.h = img.naturalHeight;
+      refreshVp(); // 加载时填充缓存（仅一次，非每帧）
+      stage.style.transition = 'none'; // 加载定位不播放动画，避免飞入
+      fit();
+      updateInfo();
+      requestAnimationFrame(()=>{ stage.style.transition = ''; });
+    };
+    img.onerror = ()=>{ removeCurrent(); }; // 损坏/不支持的格式：跳过该图
     img.src = it.url;
+    // P2：文件名/序号与缩放无关，立即同步更新，避免大图/慢速本地文件 onload 前工具栏仍显示上一张（pct 仍在 onload→fit→apply 里更新）
     fname.textContent = it.path;
+    fname.title = it.path;
+    fmeta.textContent = (state.index + 1) + ' / ' + items.length;
     updateThumbsActive();
   }
   function updateInfo(){
@@ -273,7 +324,7 @@
     fname.textContent = cur ? cur.path : '—';
     fname.title = cur ? cur.path : '';
     fmeta.textContent = (state.index + 1) + ' / ' + items.length;
-    pct.textContent = Math.round(state.scale * 100) + '%';
+    // pct 的写入由 apply() 负责（apply 被 fit/zoomAt/zoomCenter/拖拽 pointermove/updatePinch 等多路径触发），此处不再直接写 pct，以免绕过 apply 的 aria-label 守卫
   }
   function renderThumbs(){
     thumbs.innerHTML = '';
@@ -281,15 +332,19 @@
       const t = document.createElement('div');
       t.className = 'thumb' + (i === state.index ? ' active' : '');
       t.dataset.i = i;
+      t.setAttribute('role', 'button');
+      t.setAttribute('aria-label', '查看图片 ' + it.path); // P2：只描述"查看此项"；Delete 删除的是当前查看项（state.index），与焦点无关，故不在此误导
+      t.tabIndex = 0;
       const im = document.createElement('img');
-      im.src = it.url; im.alt = it.path;
+      im.src = it.url; im.alt = '';      // 外层 .thumb 已用 aria-label 覆盖语义，内部 img 作为装饰，alt 置空避免读屏重复播报
       const del = document.createElement('div');
       del.className = 'del'; del.textContent = '×'; del.dataset.del = i;
       del.title = '移除';
+      // P2：.del 用 aria-hidden 从 a11y 树彻底移除（删除统一走当前项 Delete 快捷键，见 window keydown），仅作鼠标视觉入口
+      del.setAttribute('aria-hidden', 'true');
       t.appendChild(im); t.appendChild(del);
       thumbs.appendChild(t);
     });
-    thumbs.scrollLeft = thumbs.scrollWidth;
   }
   function updateThumbsActive(){
     [...thumbs.children].forEach((c, i)=>{
@@ -303,11 +358,14 @@
     if(!items.length) return;
     state.index = (i + items.length) % items.length;
     state.rot = 0;
+    imgDim.w = imgDim.h = 0;           // P3：清旧图尺寸，避免加载完成前 fit 判据用错旧尺寸
     renderCurrent();
     updateInfo();
   }
 
   /* ---------- 文件加载（完全本地，不上传） ---------- */
+  // 去重键加入 webkitRelativePath：避免不同文件夹下同名同大小同修改时间的文件被误判为同一张
+  const keyOf = (f)=> (f.webkitRelativePath || f.name) + '|' + f.size + '|' + (f.lastModified || 0);
   function addFiles(fileList){
     const files = [...fileList].filter(f=>{
       if(f.type && f.type.startsWith('image/')) return true;
@@ -316,10 +374,17 @@
       (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name, 'zh')
     );
     if(!files.length) return;
+    const seen = new Set(items.map(it => keyOf(it.file)));
     const wasEmpty = items.length === 0;
-    files.forEach(f => items.push({
-      file:f, url:URL.createObjectURL(f), name:f.name, path:f.webkitRelativePath || f.name
-    }));
+    let added = 0;
+    files.forEach(f=>{
+      const k = keyOf(f);
+      if(seen.has(k)) return; // 去重：同名同大小同修改时间视为同一文件
+      seen.add(k);
+      items.push({ file:f, url:URL.createObjectURL(f), name:f.name, path:f.webkitRelativePath || f.name, key:k });
+      added++;
+    });
+    if(!added) return;
     if(wasEmpty){
       state.index = 0;
       showViewer();
@@ -328,9 +393,13 @@
     } else {
       renderThumbs();
       updateInfo();
+      updateThumbsActive(); // 新加入的图滚动到可视区
     }
+    syncThumbsVisibility();
   }
   function removeCurrent(){
+    if(!items.length){ showEmpty(); return; }
+    const focusInThumbs = thumbs.contains(document.activeElement);   // P3：记录删除前焦点是否在缩略图区，删除后尽量把焦点留在其中
     const it = items[state.index];
     if(it) URL.revokeObjectURL(it.url);
     items.splice(state.index, 1);
@@ -340,6 +409,8 @@
     renderThumbs();
     renderCurrent();
     updateInfo();
+    syncThumbsVisibility();
+    if(focusInThumbs){ const act = thumbs.querySelector('.thumb.active'); if(act) act.focus(); } // 焦点落到新当前项缩略图
   }
   function clearAll(){
     items.forEach(it => URL.revokeObjectURL(it.url));
@@ -347,37 +418,115 @@
     showEmpty();
   }
 
+  function syncThumbsVisibility(){ thumbs.classList.toggle('show', items.length > 1); }
   function showViewer(){
     empty.classList.add('hidden');
     toolbar.classList.remove('hidden');
     viewport.classList.remove('hidden');
-    thumbs.classList.toggle('show', items.length > 1);
+    refreshVp();
+    syncThumbsVisibility();
   }
   function showEmpty(){
+    // P3：若删除/清空前焦点在缩略图或工具栏，清空后把焦点移到"选择图片"按钮，避免焦点掉到 body 丢失上下文
+    const refocus = document.activeElement && (thumbs.contains(document.activeElement) || toolbar.contains(document.activeElement));
     empty.classList.remove('hidden');
     toolbar.classList.add('hidden');
     viewport.classList.add('hidden');
     thumbs.classList.remove('show');
+    img.onload = null; img.onerror = null; // 摘掉回调，避免 removeAttribute('src') 触发链式删除/重入
     img.removeAttribute('src');
+    imgDim.w = imgDim.h = 0;
+    lastWasFit = false;                // 视图清空后无 fit 态，复位标志位（语义对齐）
+    document.body.classList.remove('immersive', 'reveal'); // P2：清空残留的沉浸/唤出态，否则重新加载后 toolbar 因 CSS 规则 opacity:0 短暂隐身
+    if(refocus){ const ob = document.getElementById('openEmpty'); if(ob) ob.focus(); }
   }
 
-  /* ---------- 交互：拖拽平移 ---------- */
+  /* ---------- 交互：单指拖拽平移 / 双指 pinch 缩放 ---------- */
+  const pointers = new Map();
   let dragging = false, sx = 0, sy = 0, stx = 0, sty = 0;
+  let pinch = null;
+  let lastPointerType = 'mouse';
+
+  function startPinch(){
+    const pts = [...pointers.values()];
+    pinch = {
+      startDist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1,
+      startScale: state.scale,
+      startTx: state.tx, startTy: state.ty,
+      startMidX: (pts[0].x + pts[1].x) / 2,
+      startMidY: (pts[0].y + pts[1].y) / 2
+    };
+    stage.style.transition = 'none';
+  }
+  function updatePinch(){
+    const pts = [...pointers.values()];
+    const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+    const midX = (pts[0].x + pts[1].x) / 2;
+    const midY = (pts[0].y + pts[1].y) / 2;
+    const newScale = clampScale(pinch.startScale * (dist / pinch.startDist));
+    const k = newScale / pinch.startScale;
+    // P2：pinch 后同样用相对误差动态判定（与 zoomAt 一致，尺度无关）
+    lastWasFit = Math.abs(newScale / computeFitScale() - 1) < 1e-3;
+    // 直接使用缓存的 vp.left/top，不再每帧读 getBoundingClientRect（避免强制同步布局）
+    const mx0 = pinch.startMidX - vp.left, my0 = pinch.startMidY - vp.top;
+    // 以起始双指中点为缩放中心 + 叠加双指整体平移
+    state.scale = newScale;
+    // 正确的以起始双指中点为缩放中心公式：T1 = mx0 - k·(mx0 - T0)，再叠加双指整体平移
+    state.tx = mx0 - k * (mx0 - pinch.startTx) + (midX - pinch.startMidX);
+    state.ty = my0 - k * (my0 - pinch.startTy) + (midY - pinch.startMidY);
+    apply();
+  }
+
   viewport.addEventListener('pointerdown', (e)=>{
-    if(e.button !== 0) return;
-    dragging = true; sx = e.clientX; sy = e.clientY; stx = state.tx; sty = state.ty;
+    if(e.pointerType === 'mouse' && e.button !== 0) return;
+    lastPointerType = e.pointerType;
+    pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
     viewport.setPointerCapture(e.pointerId);
-    viewport.classList.add('grabbing');
+    if(pointers.size === 1){
+      dragging = true; sx = e.clientX; sy = e.clientY; stx = state.tx; sty = state.ty;
+      stage.style.transition = 'none'; // 拖拽时关闭过渡，保持跟手
+      viewport.classList.add('grabbing');
+    } else if(pointers.size === 2){
+      dragging = false;
+      startPinch();                 // 仅前两根手指组成 pinch 对
+    } else {
+      // 第三根及以上手指：不参与 pinch，取消当前缩放基线，避免多指抖动
+      pinch = null;
+    }
   });
   viewport.addEventListener('pointermove', (e)=>{
-    if(!dragging) return;
-    state.tx = stx + (e.clientX - sx);
-    state.ty = sty + (e.clientY - sy);
-    apply();
+    checkEdgeReveal(e.clientY); // 每次指针移动（含鼠标悬停，无需按住）都判定边缘唤出，避免依赖 window.mousemove 重复监听
+    if(!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+    if(pointers.size >= 2 && pinch){
+      updatePinch();
+    } else if(dragging){
+      state.tx = stx + (e.clientX - sx);
+      state.ty = sty + (e.clientY - sy);
+      apply();
+    }
   });
-  function endDrag(){ dragging = false; viewport.classList.remove('grabbing'); }
-  viewport.addEventListener('pointerup', endDrag);
-  viewport.addEventListener('pointercancel', endDrag);
+  // P3：鼠标静止在边缘时 pointermove 不触发，pointerenter 兜底唤出一次
+  viewport.addEventListener('pointerenter', (e)=>checkEdgeReveal(e.clientY));
+  function endPointer(e){
+    pointers.delete(e.pointerId);
+    if(pointers.size === 1){
+      // 双指松一指：以剩余指为起点继续拖拽
+      const p = [...pointers.values()][0];
+      dragging = true; sx = p.x; sy = p.y; stx = state.tx; sty = state.ty;
+      pinch = null;
+    } else if(pointers.size === 0){
+      dragging = false; pinch = null;
+      viewport.classList.remove('grabbing');
+      stage.style.transition = '';
+    } else if(pointers.size === 2){
+      dragging = false;
+      startPinch();                 // P0：松回两指无条件重建 pinch 基线，避免"既不拖也不缩"冻结
+    }
+    // size >= 3：多余手指忽略，保持当前基线（pinch 仍可能为 null）
+  }
+  viewport.addEventListener('pointerup', endPointer);
+  viewport.addEventListener('pointercancel', endPointer);
 
   /* ---------- 滚轮缩放（以指针为中心） ---------- */
   viewport.addEventListener('wheel', (e)=>{
@@ -388,9 +537,10 @@
     zoomAt(e.clientX - r.left, e.clientY - r.top, factor);
   }, { passive:false });
 
-  /* ---------- 双击：适应 / 实际大小 切换 ---------- */
+  /* ---------- 双击：适应 / 实际大小 切换（仅鼠标，避免与触屏 pinch 冲突） ---------- */
   viewport.addEventListener('dblclick', ()=>{
     if(!items.length) return;
+    if(lastPointerType === 'touch') return;
     if(Math.abs(state.scale - 1) < 0.01) fit(); else actual();
   });
 
@@ -420,39 +570,86 @@
     const t = e.target.closest('.thumb');
     if(t) select(+t.dataset.i);
   });
+  // 键盘可达：缩略图（role=button）支持 Enter / 空格切换到该项查看
+  thumbs.addEventListener('keydown', (e)=>{
+    if(e.key !== 'Enter' && e.key !== ' ') return;
+    const t = e.target.closest('.thumb');
+    if(t){ e.preventDefault(); e.stopPropagation(); select(+t.dataset.i); } // P1：阻止冒泡到 window，避免空格选中又触发双重翻页
+  });
 
   /* ---------- 文件选择 ---------- */
   fileInput.addEventListener('change', (e)=>{ addFiles(e.target.files); fileInput.value = ''; });
   folderInput.addEventListener('change', (e)=>{ addFiles(e.target.files); folderInput.value = ''; });
 
-  /* ---------- 拖拽到窗口 ---------- */
+  /* ---------- 拖拽到窗口（支持直接拖入文件夹，递归展开） ---------- */
+  async function walkDir(dir, out){
+    const reader = dir.createReader();
+    let batch;
+    do {
+      batch = await new Promise(r=>reader.readEntries(r));
+      for(const en of batch){
+        if(en.isFile) out.push(await new Promise(r=>en.file(r)));
+        else if(en.isDirectory) await walkDir(en, out);
+      }
+    } while(batch.length > 0);
+  }
+  async function getFilesFromDrop(dt){
+    const out = [];
+    if(dt.items && dt.items.length && dt.items[0].webkitGetAsEntry){
+      const entries = [];
+      const list = Array.from(dt.items); // DataTransferItemList 不一定可迭代，先转数组避免 TypeError
+      for(const it of list){
+        if(it.kind !== 'file') continue;
+        const en = it.webkitGetAsEntry();
+        if(en) entries.push(en);
+      }
+      for(const en of entries){
+        if(en.isFile) out.push(await new Promise(r=>en.file(r)));
+        else if(en.isDirectory) await walkDir(en, out);
+      }
+    } else if(dt.files){
+      for(const f of dt.files) out.push(f);
+    }
+    return out;
+  }
   let dragDepth = 0;
   window.addEventListener('dragenter', (e)=>{ e.preventDefault(); dragDepth++; dropOverlay.classList.add('show'); });
   window.addEventListener('dragover', (e)=>{ e.preventDefault(); });
   window.addEventListener('dragleave', (e)=>{ e.preventDefault(); dragDepth--; if(dragDepth<=0){ dropOverlay.classList.remove('show'); dragDepth=0; } });
-  window.addEventListener('drop', (e)=>{
+  window.addEventListener('drop', async (e)=>{
     e.preventDefault(); dragDepth = 0; dropOverlay.classList.remove('show');
-    if(e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+    let files = [];
+    if(e.dataTransfer) files = await getFilesFromDrop(e.dataTransfer);
+    if(files.length) addFiles(files);
   });
 
-  /* ---------- 沉浸模式：鼠标移到边缘临时唤出工具栏 ---------- */
-  window.addEventListener('mousemove', (e)=>{
+  /* ---------- 沉浸模式：移到边缘临时唤出工具栏（鼠标 + 触屏共用） ---------- */
+  function checkEdgeReveal(clientY){
     if(!document.body.classList.contains('immersive')){
       document.body.classList.remove('reveal');
       return;
     }
     const EDGE = 44;
-    if(e.clientY < EDGE || e.clientY > window.innerHeight - EDGE){
+    if(clientY < EDGE || clientY > win.h - EDGE){  // P2：用缓存 win.h，避免每帧读 window.innerHeight
       document.body.classList.add('reveal');
     } else {
       document.body.classList.remove('reveal');
     }
+  }
+  // 边缘唤出已改由 viewport 的 pointermove 统一处理（鼠标悬停即触发，无需 window.mousemove 重复监听）
+  // 窗口尺寸变化会改变适应比例，刷新沉浸态判断（不强制重置用户缩放）
+  window.addEventListener('resize', ()=>{
+    refreshWin(); refreshVp();          // 刷新窗口尺寸与视口缓存
+    if(lastWasFit) fit(); else updateChrome(); // 仅在"适应窗口"态下随窗口重 fit，否则保留用户缩放
   });
 
   /* ---------- 键盘快捷键 ---------- */
   window.addEventListener('keydown', (e)=>{
     if(!items.length) return;
-    if(e.target === fileInput) return;
+    if(e.target === fileInput || e.target === folderInput) return;
+    // P1：焦点在交互元素（工具栏按钮/链接/输入框/缩略图）上时，空格交给元素原生处理，不放任快捷键劫持其激活（否则键盘用户无法用空格点工具栏按钮）
+    // fileInput/folderInput 已在上一行被排除，此选择器不再含 input
+    if(e.key === ' ' && e.target.closest && e.target.closest('button, [role="button"], a, textarea, select')) return;
     switch(e.key){
       case 'ArrowRight': case ' ': case 'PageDown': e.preventDefault(); select(state.index + 1); break;
       case 'ArrowLeft': case 'PageUp': e.preventDefault(); select(state.index - 1); break;
@@ -463,10 +660,22 @@
       case 'r': case 'R': rotate(); break;
       case 'Delete': case 'Backspace': removeCurrent(); break;
       case 'Escape':
-        if(document.fullscreenElement){ document.exitFullscreen(); break; }
+        if(document.fullscreenElement || document.webkitFullscreenElement){
+          (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+          break;
+        }
         clearAll();
         break;
     }
+  });
+
+  /* ---------- 其他：资源回收 / 无障碍 ---------- */
+  // P1：用 pagehide 替代 beforeunload；event.persisted 为真表示页面将进入 bfcache，
+  //     此时不回收 ObjectURL，否则前进/后退恢复后图片会失效
+  window.addEventListener('pagehide', (e)=>{ if(!e.persisted) items.forEach(it=>URL.revokeObjectURL(it.url)); });
+  // 其它图标按钮用途固定，aria-label 取 title 即可；pct 是动态内容，单独在 apply() 维护，这里排除
+  document.querySelectorAll('[data-act]:not(#pct)').forEach(el=>{
+    if(el.title && !el.getAttribute('aria-label')) el.setAttribute('aria-label', el.title);
   });
 
   /* 窗口尺寸变化时不强制重置视图，保持用户自由缩放状态 */
