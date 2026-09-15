@@ -124,6 +124,7 @@ let imgDim = {w,h}         // onload 刷新一次
 
 ---
 ## 项目截图
+![项目截图](image-viewer.png)
 ---
 ## 许可证
 
