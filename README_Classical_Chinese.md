@@ -1,4 +1,4 @@
-[English](README.md) | [簡體中文](README_Simplified_Chinese.md) | [繁體中文](README_Classical_Chinese.md)
+[English](README.md) | [简体中文](README_Simplified_Chinese.md) | [繁體中文](README_Classical_Chinese.md)
 
 ## 一、總綱
 
