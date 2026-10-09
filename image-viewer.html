@@ -236,12 +236,14 @@
   // 放大到图片溢出视口时隐藏上下工具栏，缩小回适应即恢复
   function updateChrome(){
     // 相对容差：与 lastWasFit 的判定风格一致（scale 回到 fitScale 的 0.1% 内即视为 fit 态）；对极小 fitScale 安全（imgDim 失效时 computeFitScale 返回 state.scale，阈值=scale*1.001，判定为 false）
-    const immersive = state.scale > computeFitScale() * (1 + 1e-3);
+    const immersive = state.scale > fitScaleClamped() * (1 + 1e-3);
     document.body.classList.toggle('immersive', immersive);
     if(!immersive) document.body.classList.remove('reveal');
   }
 
   function clampScale(s){ return Math.max(MIN_SCALE, Math.min(MAX_SCALE, s)); }
+  // fit 用的实际缩放比（受 MIN/MAX 约束）；immersive 判据与 lastWasFit 判定都应基于它，保持三者口径一致
+  function fitScaleClamped(){ return clampScale(computeFitScale()); }
 
   // 以指针(mx,my)为屏幕中心缩放：T' = m - k(m - T)
   function zoomAt(mx, my, factor){
@@ -251,7 +253,7 @@
     state.tx = mx - k * (mx - state.tx);
     state.ty = my - k * (my - state.ty);
     // P2：用相对误差判定（与尺度无关），scale 与 fitScale 偏差 < 0.1% 视为同一 fit 态
-    lastWasFit = Math.abs(state.scale / computeFitScale() - 1) < 1e-3;
+    lastWasFit = Math.abs(state.scale / fitScaleClamped() - 1) < 1e-3;
     apply();
   }
   function zoomCenter(factor){
@@ -262,7 +264,8 @@
     if(!items.length || !imgDim.w || !imgDim.h) return;
     // P0：缩放比直接取 computeFitScale() —— 与"是否进入 immersive"的判据用同一基准
     //     避免 immersive 下按 vp.h 放大到撑满后 scale>fitScale 恒成立、工具栏被锁死
-    const s = computeFitScale();
+    // G：仍需受 MAX_SCALE 约束，否则极小图片（如 2×2 图标）会被放大到远超上限（如 333×）
+    const s = fitScaleClamped();
     state.scale = s;
     state.tx = vp.w / 2;                // 居中按实际视口（视觉即时），与 scale 判据解耦
     state.ty = vp.h / 2;
@@ -303,7 +306,11 @@
   function renderCurrent(){
     const it = items[state.index];
     if(!it) return;
+    // 先摘掉上一张图可能残留的回调，避免其 error/load 事件作用到本次切换后的状态
+    img.onload = null; img.onerror = null;
     img.onload = ()=>{
+      // 回调可能晚于状态变化（快速连点/切换）：确认当前仍是这张图再应用尺寸
+      if(items[state.index] !== it) return;
       imgDim.w = img.naturalWidth; imgDim.h = img.naturalHeight;
       refreshVp(); // 加载时填充缓存（仅一次，非每帧）
       stage.style.transition = 'none'; // 加载定位不播放动画，避免飞入
@@ -311,7 +318,8 @@
       updateInfo();
       requestAnimationFrame(()=>{ stage.style.transition = ''; });
     };
-    img.onerror = ()=>{ removeCurrent(); }; // 损坏/不支持的格式：跳过该图
+    // 捕获当次 it：陈旧图片的 error 只在"它仍是当前项"时才触发跳过，避免误删刚切换过去的新图
+    img.onerror = ()=>{ if(items[state.index] === it) removeCurrent(); }; // 损坏/不支持的格式：跳过该图
     img.src = it.url;
     // P2：文件名/序号与缩放无关，立即同步更新，避免大图/慢速本地文件 onload 前工具栏仍显示上一张（pct 仍在 onload→fit→apply 里更新）
     fname.textContent = it.path;
@@ -409,6 +417,7 @@
     renderThumbs();
     renderCurrent();
     updateInfo();
+    updateThumbsActive(); // 重建 DOM 后把新当前项滚动到可视区（renderThumbs 本身不滚动）
     syncThumbsVisibility();
     if(focusInThumbs){ const act = thumbs.querySelector('.thumb.active'); if(act) act.focus(); } // 焦点落到新当前项缩略图
   }
@@ -423,7 +432,7 @@
     empty.classList.add('hidden');
     toolbar.classList.remove('hidden');
     viewport.classList.remove('hidden');
-    refreshVp();
+    refreshWin(); refreshVp();   // 同时刷新窗口尺寸与视口缓存：空态期间窗口可能已被缩放，否则 fitScale 会用过期 win.h
     syncThumbsVisibility();
   }
   function showEmpty(){
@@ -466,7 +475,7 @@
     const newScale = clampScale(pinch.startScale * (dist / pinch.startDist));
     const k = newScale / pinch.startScale;
     // P2：pinch 后同样用相对误差动态判定（与 zoomAt 一致，尺度无关）
-    lastWasFit = Math.abs(newScale / computeFitScale() - 1) < 1e-3;
+    lastWasFit = Math.abs(newScale / fitScaleClamped() - 1) < 1e-3;
     // 直接使用缓存的 vp.left/top，不再每帧读 getBoundingClientRect（避免强制同步布局）
     const mx0 = pinch.startMidX - vp.left, my0 = pinch.startMidY - vp.top;
     // 以起始双指中点为缩放中心 + 叠加双指整体平移
@@ -481,7 +490,8 @@
     if(e.pointerType === 'mouse' && e.button !== 0) return;
     lastPointerType = e.pointerType;
     pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
-    viewport.setPointerCapture(e.pointerId);
+    // H：setPointerCapture 在指针已失效/浏览器未跟踪该 id 时会抛异常，若不加保护会中断后续手势初始化
+    try { viewport.setPointerCapture(e.pointerId); } catch(err){ /* 忽略：捕获失败不影响基于坐标的手势计算 */ }
     if(pointers.size === 1){
       dragging = true; sx = e.clientX; sy = e.clientY; stx = state.tx; sty = state.ty;
       stage.style.transition = 'none'; // 拖拽时关闭过渡，保持跟手
@@ -515,10 +525,12 @@
       const p = [...pointers.values()][0];
       dragging = true; sx = p.x; sy = p.y; stx = state.tx; sty = state.ty;
       pinch = null;
+      // 缩放结束（改为单指拖拽）→ 恢复过渡，否则后续 fit/滚轮缩放动画仍被禁用
+      if(!stage.style.transition) stage.style.transition = '';
     } else if(pointers.size === 0){
       dragging = false; pinch = null;
       viewport.classList.remove('grabbing');
-      stage.style.transition = '';
+      stage.style.transition = '';   // 手势完全结束，恢复过渡动画
     } else if(pointers.size === 2){
       dragging = false;
       startPinch();                 // P0：松回两指无条件重建 pinch 基线，避免"既不拖也不缩"冻结
@@ -612,12 +624,24 @@
     }
     return out;
   }
-  let dragDepth = 0;
-  window.addEventListener('dragenter', (e)=>{ e.preventDefault(); dragDepth++; dropOverlay.classList.add('show'); });
+  // 用"指针是否仍在窗口内"判定遮罩显隐，替代易失配的 dragenter/dragleave 计数：
+  // 一次拖拽进入子元素会连续触发 dragenter 而 dragleave 不成对，计数法会在中途误清零或残留
+  window.addEventListener('dragenter', (e)=>{
+    e.preventDefault();
+    dropOverlay.classList.add('show');
+  });
+  // dragover 持续 preventDefault 才会被识别为可放置区
   window.addEventListener('dragover', (e)=>{ e.preventDefault(); });
-  window.addEventListener('dragleave', (e)=>{ e.preventDefault(); dragDepth--; if(dragDepth<=0){ dropOverlay.classList.remove('show'); dragDepth=0; } });
+  window.addEventListener('dragleave', (e)=>{
+    e.preventDefault();
+    // 仅当真正离开窗口（relatedTarget 为 null 或落到窗口外）才隐藏，忽略窗口内部元素间的 dragleave
+    if(e.relatedTarget === null || (e.clientX <= 0 && e.clientY <= 0) ||
+       e.clientX >= window.innerWidth || e.clientY >= window.innerHeight){
+      dropOverlay.classList.remove('show');
+    }
+  });
   window.addEventListener('drop', async (e)=>{
-    e.preventDefault(); dragDepth = 0; dropOverlay.classList.remove('show');
+    e.preventDefault(); dropOverlay.classList.remove('show');
     let files = [];
     if(e.dataTransfer) files = await getFilesFromDrop(e.dataTransfer);
     if(files.length) addFiles(files);
