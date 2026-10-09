@@ -1,3 +1,5 @@
+[English](README.md) | [简体中文](README_Simplified_Chinese.md) | [繁體中文](README_Classical_Chinese.md)
+
 # 图片查看器 · Image Viewer
 
 一个**纯本地、零上传、单文件**的网页图片查看器。整个应用压缩在一个 `image-viewer.html` 里，双击即可在浏览器中运行，无需服务器、无需构建、无需联网。
@@ -18,7 +20,8 @@
 - [已知边界与取舍](#已知边界与取舍)
 - [文件结构](#文件结构)
 - [常见问题](#常见问题)
-
+- [项目截图](#项目截图)
+- [许可证](#许可证)
 ---
 
 ## 快速开始
@@ -212,5 +215,11 @@ function computeFitScale(){
 搜索 `MIN_SCALE` / `MAX_SCALE`（缩放范围）、`1.15` / `1.3`（滚轮与按钮步长）、以及文件末尾的 `keydown` 监听（快捷键映射）即可。
 
 ---
+## 项目截图
 
-*单文件 · 零依赖 · 零上传 · 纯白极简*
+
+![project-screenshot](project_screenshot.png)
+
+## 许可证
+
+[MIT](LICENSE)
