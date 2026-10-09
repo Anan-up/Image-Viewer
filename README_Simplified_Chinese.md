@@ -218,7 +218,7 @@ function computeFitScale(){
 ## 项目截图
 
 
-![project-screenshot](project_screenshot.png)
+![project-screenshot](image-viewer.png)
 
 ## 许可证
 
