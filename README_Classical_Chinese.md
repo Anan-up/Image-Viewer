@@ -1,132 +1,226 @@
 [English](README.md) | [简体中文](README_Simplified_Chinese.md) | [繁體中文](README_Classical_Chinese.md)
 
-## 一、總綱
+# 圖像覽器 · Image Viewer
 
-此乃**絕依賴、純原生 JS、單文件**之本地圖像觀覽器。凡所處理，皆行於瀏覽器之內，未嘗上傳一紙。其界面用簡體中文，尚極簡白底之風（彷彿 macOS 預覽、Google Photos 之輕量者）。
+一**純本地、零上傳、單文卷**之網頁圖像覽器。全器壓於一 `image-viewer.html` 之中，雙擊即行於瀏覽器，無需伺服、無需構建、無需聯網。
+
+> 專注於「觀圖」一事：多格式皆容、縮放 / 平移 / 旋轉隨心、資料夾可批量瀏覽。無裁剪、塗鴉、濾鏡等編修之能。
 
 ---
 
-## 二、功能列目
+## 目錄
 
-| 類 | 能 |
+- [速用之法](#速用之法)
+- [功能之屬](#功能之屬)
+- [鍵盤快捷](#鍵盤快捷)
+- [滑鼠與觸屏之操作](#滑鼠與觸屏之操作)
+- [隱私與安全](#隱私與安全)
+- [瀏覽器相容](#瀏覽器相容)
+- [技術之實現](#技術之實現)
+- [已知邊界與取捨](#已知邊界與取捨)
+- [文卷結構](#文卷結構)
+- [常見問答](#常見問答)
+- [項目截圖](#項目截圖)
+- [許可之證](#許可之證)
+
+---
+
+## 速用之法
+
+1. 下載 `image-viewer.html`（或解 `image-viewer.zip` 而得之）。
+2. 以瀏覽器開此卷（雙擊之，或拖入瀏覽器之窗）。
+3. 將圖或整個資料夾拖入窗中，或點「選取圖像」「選取資料夾」。
+
+無需安裝任何依賴，亦無需啟本地伺服。若欲經 `http://` 而訪（如某些瀏覽器於 `file://` 下有所限之 API），可於該目錄下隨啟靜態伺服，例如：
+
+```bash
+python3 -m http.server 8000
+# 然後訪 http://localhost:8000/image-viewer.html
+```
+
+---
+
+## 功能之屬
+
+| 類別 | 說明 |
 |---|---|
-| 開 | 拖曳至窗／資料夾（遞歸展開）、擇文件、擇資料夾（`webkitdirectory`） |
-| 覽 | 前張／次張、縮略條（逾一張方現）、循環往復 |
-| 縮 | 滾輪（以指為錨）、雙指捏合、雙擊切 fit／一對一、按鈕／捷徑鍵 |
-| 視 | 適窗（fit）、原大（百分百）、旋九十度、全屏 |
-| 理 | 刪當前、Esc 清空、去重（路徑＋大小＋末改時） |
-| 隱 | 放大逾 fit 則上下欄自隱，鼠移近上下緣四十四像素內暫現 |
-| 式 | JPG／PNG／GIF／WebP／SVG／BMP／ICO／AVIF／TIF 之屬 |
+| **多格式** | JPG / JPEG / PNG / GIF / WebP / SVG / BMP / ICO / AVIF / TIFF，各視瀏覽器自身解碼之能 |
+| **完全本地** | 圖經 `URL.createObjectURL` 直讀，**不經任何伺服、不上傳** |
+| **資料夾瀏覽** | 容「選取整個資料夾」與「拖入資料夾」，自動遞歸展其子目 |
+| **自由縮放** | 滾輪 / 雙指捏合 / 工具欄之鈕，並容以指標為錨之縮放 |
+| **平移** | 按住而拖；觸屏則單指拖之 |
+| **旋轉** | 以 90° 為步而旋，旋畢自復適於窗 |
+| **適應 / 實際大小** | 一鍵往還於「適於窗」與「一比一原像素」之間 |
+| **縮略圖條** | 底部縮略圖速換，可獨移其一 |
+| **沉浸模式** | 放大至圖溢於視口時，自隱上下工具欄；滑鼠 / 手指移至屏之緣則暫喚而出 |
+| **全屏** | 原生 Fullscreen API，兼有 `webkit` 前綴為備 |
+| **鍵盤無障** | 快捷俱備；縮略圖 / 諸鈕皆容 Tab 聚焦與讀屏之籤 |
+| **平滑動畫** | 縮放 / 旋轉皆帶緩動之過渡，拖拽與捏合時自閉過渡以保跟手 |
 
 ---
 
-## 三、架構與數流
+## 鍵盤快捷
 
-```
-狀態 state {scale, tx, ty, rot, index}   數據 items[{file,url,name,path,key}]
-        ↓                                        ↓
-    apply() 書 stage.transform            繪 img ／ thumbs ／ 欄文
-```
-
-- **單一 `<img>` 復用**：易圖唯易其 `src`，不重建 DOM。
-- **stage 裹層**：`transform-origin:0 0`，圖以 `translate(-50%,-50%)` 自中心對齊 stage 之原點。故 `(tx,ty)` 之義甚明——**圖心在視口中之坐標**也。
-
----
-
-## 四、核心要術
-
-### 一、變換之模（其數甚潔）
-```js
-stage.transform = `translate(tx,ty) scale(s) rotate(rot)`
-```
-凡縮放、平移，唯改 `tx/ty/scale`，圖身不重排。
-
-### 二、以指為錨之縮
-```js
-T' = m - k·(m - T)   // k = newScale/oldScale
-```
-`zoomAt` 與 `updatePinch` 共用一公式，捏合復疊雙指整移。如是則縮時「指下之像素」不動，其感自然。
-
-### 三、⭐ P0 要術：fitScale 與 immersive 相解耦
-此乃全篇最可稱道之修正。其患如下：
-
-- 隱模式下視口由 `h-54` 變為 `h`；
-- 若 fitScale 以**實際視口之高**計，則放大觸隱 → 視口增高 → fitScale 增 → 相對之 scale 減 → 退隱 → 視口減矮 → ……**死循環而震**。
-
-其解：令 `computeFitScale()` 恒用 `win.h - BAR`，不繫於實際視口之高；`fit()` 之居中仍用真 `vp.h/2`（視覺即正）。判準既一，震自絕。
-
-```js
-// 基高恒為 win.h - BAR，與 immersive 解耦
-return Math.min(win.w / w, Math.max(0, win.h - BAR) / h);
-```
-
-### 四、幾何之緩存，免強制同步佈局
-```js
-let vp  = {left,top,w,h}   // ResizeObserver 更之
-let win = {w,h}            // resize 更之
-let imgDim = {w,h}         // onload 更一次
-```
-`pointermove`、捏合、`checkEdgeReveal` 自始至終讀緩存，不讀 `getBoundingClientRect()`／`innerHeight`。此乃拖曳跟手流暢之要。
-
-### 五、多點觸控之狀態機
-以 `Map<pointerId, {x,y}>` 理之：
-
-| 事 | 處 |
+| 按鍵 | 功能 |
 |---|---|
-| 第一指按 | 入拖 |
-| 第二指按 | 止拖，立捏合基線 |
-| 第三指以上按 | 忽之，`pinch = null` 防抖 |
-| 由二指鬆至一指 | 以餘指為新始續拖 |
-| 由三指鬆回二指 | **無條件重建捏合基線**（P0，否則「既不拖亦不縮」而凍） |
+| `←` / `PageUp` | 上一張 |
+| `→` / `空格` / `PageDown` | 下一張 |
+| `+` / `=` | 放大 |
+| `-` / `_` | 縮小 |
+| `0` / `f` / `F` | 適於窗 |
+| `1` | 實際大小（百分百） |
+| `r` / `R` | 順時針旋 90° |
+| `Delete` / `Backspace` | 移當前之圖 |
+| `Esc` | 全屏時則退全屏；非全屏時則清空一切 |
 
-佐以 `setPointerCapture`，指移出視口亦不遺其事。
-
-### 六、過渡之控
-拖曳／捏合／易圖定位時 `stage.style.transition='none'`，釋手或以 `requestAnimationFrame` 復之，以免「橡皮筋之滯」與「圖飛入」。
-
----
-
-## 五、文件之處
-
-- **去重之鍵**：`(webkitRelativePath||name) + size + lastModified`——免異目錄同名之誤判。
-- **排序**：唯於**本批**依路徑 `localeCompare('zh')` 序之（累次拖入，全局之序或未善）。
-- **拖曳目錄**：`webkitGetAsEntry()` → 遞歸 `createReader().readEntries()`，用 `do...while` 之環者，以 `readEntries` **每召至多返百條**，必屢召至空陣而後已。
+> 若焦在工具欄之鈕、縮略圖等交互動之元上，**空格歸該元自處理**（如激活其鈕），不為翻頁之快捷所奪。
 
 ---
 
-## 六、無礙（A11y）之工，勝於常例
+## 滑鼠與觸屏之操作
 
-- 縮略 `role="button"` ＋ `tabIndex=0` ＋ `aria-label` ＋ `:focus-visible` 之框。
-- 縮略內 `<img alt="">` 標為飾，免讀屏重報。
-- 刪除鈕 `aria-hidden="true"`（刪統走 Delete 鍵，免 a11y 樹中義之歧）。
-- `pct` 唯於百分比**實變**時方書於 DOM，且附 `aria-label`——免讀屏於拖曳時逐幀而報。
-- 刪／清後，主移焦於當者（新當前縮略／「擇圖」之鈕），不令焦落 `body`。
-- 空格鍵於焦在 `button/[role=button]/a/textarea/select` 時**不劫**，還其原生觸發。
-- 圖標鈕自 `title` 補 `aria-label`。
+**滑鼠**
 
----
+- 滾輪：以指標之位為心而縮放
+- 按住左鍵而拖：平移
+- 雙擊：往還於「適於窗」與「實際大小」之間
+- 懸於縮略圖右上之 `×`：移其圖
+- 放大後移標於屏之上 / 下緣：暫喚工具欄
 
-## 七、內存與生死
+**觸屏**
 
-- `URL.createObjectURL` ＋ 刪／清時 `revokeObjectURL`。
-- **以 `pagehide` 易 `beforeunload`**，且察 `e.persisted`：若頁入 bfcache 則不收，否則前後返復後圖皆壞。此乃極常之正法。
-
----
-
-## 八、註中 P0–P3 之標
-
-此標識示其碼嘗歷一輪**系統之審／迭代**，註言「所以然」而非「所為」，其可讀遠勝常例：
-
-- **P0**：致功能之疵者（fit／immersive 死循環、捏合基線凍）
-- **P1**：傷用者（空格劫鈕、bfcache 收）
-- **P2**：感／效之細（DOM 書之守、緩存讀幾何、隱態之遺）
-- **P3**：琢磨者（焦之管、寸之復）
+- 單指拖：平移
+- 雙指捏合：縮放（以雙指中點為錨，並疊雙指整體之平移）
+- 放大後指抵上 / 下緣：暫喚工具欄
 
 ---
 
-## 
-![項目截圖](image-viewer.png)
+## 隱私與安全
+
+- **零上傳**：圖經 `URL.createObjectURL(file)` 生本地物件之 URL，直餵於 `<img>`，數據終不離本機。
+- **零網路**：單卷不含任何外求（無 CDN、無字體、無埋點）。
+- **資源回收**：頁卸時（`pagehide` 且非 bfcache 之況）統一 `revokeObjectURL`，以免記憶之漏。
+
 ---
-## 許可
+
+## 瀏覽器相容
+
+面向一切現代瀏覽器（Chromium / Firefox / Safari 及移動之端）：
+
+- 用 `ResizeObserver` 以緩幾何之訊，免每幀強同步其佈局。
+- 全屏 API 兼綁標準之事與 `webkitfullscreenchange`。
+- 拖入資料夾以 `webkitGetAsEntry()` 遞歸而讀（現代瀏覽器普遍相容）。
+
+---
+
+## 技術之實現
+
+數處關鍵之設，以便後日之維護：
+
+### 一、單一變換，原點定於左上
+
+凡縮放 / 平移 / 旋轉合為一 CSS `transform`：
+
+```css
+.stage { transform-origin: 0 0; }
+```
+
+```js
+stage.style.transform =
+  `translate(${tx}px, ${ty}px) scale(${scale}) rotate(${rot}deg)`;
+```
+
+圖於 `.stage` 內以 `translate(-50%,-50%)` 自居中，使 `(tx, ty)` 恆等於「視口坐標系中圖之中心」，故縮放 / 旋轉之數算全然相解。
+
+### 二、以指標為錨之縮放
+
+設指標之屏坐標為 `m`、當前之平移為 `T`、縮放之倍率為 `k`：
+
+```
+T' = m - k · (m - T)
+```
+
+此式保指標下之圖點於縮放前後其位不變（`k = 1` 時為恆等，無跳變）。
+
+### 三、尺寸緩存，除每幀佈局之抖
+
+```js
+let vp  = { left, top, w, h };   // 視口之矩形（getBoundingClientRect），由 ResizeObserver 維之
+let win = { w, h };              // 窗之尺寸
+const BAR = 54;                  // 頂工具欄之高
+```
+
+拖拽 / 捏合之 `pointermove` 唯讀緩存，不觸強同步之佈局。
+
+### 四、適應之比例與沉浸之態相解（以免循環之抖）
+
+`computeFitScale()` 之**基準高度恆為 `win.h - BAR`**（即非沉浸態視口之高），而非實時之 `vp.h`：
+
+```js
+function computeFitScale(){
+  const rotated = ((rot % 180) + 360) % 180 === 90;
+  const w = rotated ? imgDim.h : imgDim.w;
+  const h = rotated ? imgDim.w : imgDim.h;
+  return Math.min(win.w / w, Math.max(0, win.h - BAR) / h);
+}
+```
+
+不然則成死環：入沉浸之態 → 視口變高 → `fitScale` 變大 → 「已放大」之判翻轉 → 出沉浸之態 → ……致工具欄閃爍。其與 `updateChrome()` 之判據、`lastWasFit` 之判定，統走 `fitScaleClamped()`（即再受 `MIN_SCALE` / `MAX_SCALE` 之約），以保三者口徑之一。
+
+### 五、手勢之機
+
+`pointers: Map<pointerId, {x, y}>` 以蹤諸指，依數而分派：
+
+| 指之數 | 所為 |
+|---|---|
+| 1 | 平移 |
+| 2 | 捏合縮放 |
+| ≥3 | 略其餘指，凍當前縮放之基（以免抖） |
+
+鬆時逐級而降：`3 → 2` 無條件重建捏合之基，`2 → 1` 轉為平移，`1 → 0` 終手勢而復過渡之動，杜「既不拖亦不縮」之凍態。
+
+---
+
+## 已知邊界與取捨
+
+- **`fit()` 於沉浸態有一幀偏上**：縮放依 `win.h - BAR`，居中依實際之 `vp.h`，入 / 出沉浸之瞬或有一幀微偏，出後即一，目幾不可見。
+- **拖入之卷與資料夾選擇器之去重**：去重之鍵含 `webkitRelativePath`，故「資料夾選擇器」與「直拖入同名之卷」或視為二錄（拖入時其路為空）。
+- **新增之圖為追加而非全局重排**：屢載時新圖附於末（各自內有序），不改已載項之序，以免使 `state.index` 失效。
+- **`MAX_SCALE` 之上限**：極小之圖（如 2×2 之圖標）適窗時限於 `60×`，而非按比例放至誇張之倍。
+
+---
+
+## 文卷結構
+
+```
+.
+├── image-viewer.html   # 凡所實現（HTML + CSS + JS，單卷）
+├── image-viewer.zip    # 上述單卷之打包產物
+└── README.md           # 本說明
+```
+
+---
+
+## 常見問答
+
+**問：會將吾所選或所覽之圖上傳乎？**
+否。全程用本地物件之 URL，碼中無任何上傳 / 網路之求。可斷網而用。
+
+**問：何以某些圖不能開？**
+解碼由瀏覽器定之，如部分瀏覽器不容 TIFF / AVIF。壞損或不容之卷自被略過。
+
+**問：圖標須放入 zip 乎？**
+不必。圖標皆為內聯 SVG，無外資。
+
+**問：欲改快捷 / 縮放之步長，奈何？**
+搜 `MIN_SCALE` / `MAX_SCALE`（縮放之域）、`1.15` / `1.3`（滾輪與鈕之步長）、及卷末之 `keydown` 監聽（快捷之映射）即可。
+
+---
+
+## 項目截圖
+
+![project-screenshot](image-viewer.png)
+
+## 許可之證
 
 [MIT](LICENSE)
